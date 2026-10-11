@@ -1,0 +1,17 @@
+# Du lieu lon
+data/raw/
+data/processed/
+
+# Moi truong Python
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+
+# Log va file tam
+logs/
+*.log
+
+# Thong tin rieng tu
+.env
+.streamlit/secrets.toml

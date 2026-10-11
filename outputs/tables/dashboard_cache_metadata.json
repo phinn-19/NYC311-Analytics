@@ -1,0 +1,9 @@
+{
+  "built_at": "2026-10-08T22:25:36.228425-04:00",
+  "processed_files": 48,
+  "processed_rows": 13506494,
+  "request_cube_rows": 74923,
+  "time_cube_rows": 340483,
+  "board_cube_rows": 39271,
+  "agency_cube_rows": 4069
+}
