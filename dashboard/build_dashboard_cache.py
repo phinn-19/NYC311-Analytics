@@ -463,6 +463,11 @@ def main() -> None:
         CLOSURE_OVERALL_FILE,
     )
 
+    # Keep the Cloud Closure cache in sync with ordinary cache rebuilds.
+    # This is also called automatically by refresh_data.py.
+    from build_closure_cache import main as build_closure_filter_caches
+    build_closure_filter_caches()
+
     metadata = {
         "built_at": datetime.now(
             ZoneInfo(

@@ -44,6 +44,10 @@ CLOSURE_OVERALL_FILE = TABLE_DIR / "closure_overall_summary_final.parquet"
 BOROUGH_CLOSURE_FILE = TABLE_DIR / "borough_closure_summary.parquet"
 COMPLAINT_CLOSURE_FILE = TABLE_DIR / "complaint_closure_summary.parquet"
 
+# Exact, filter-ready closure summaries: no 13M raw rows needed on Cloud.
+CLOSURE_FILTER_FILE = TABLE_DIR / "dashboard_closure_filters.parquet"
+CLOSURE_MONTHLY_FILE = TABLE_DIR / "dashboard_closure_monthly.parquet"
+
 DEFAULT_SNAPSHOT_DATE = pd.Timestamp("2026-10-06 23:59:59")
 
 
@@ -1387,6 +1391,21 @@ complaint_closure_cached = (
 community_geojson = load_geojson()
 processed_files = sorted(PROCESSED_DIR.glob("nyc311_*_processed.parquet"))
 
+# When cached closure statistics exist, all filters operate on compact exact
+# pre-computed results. Locally, the old on-demand computation remains a
+# fallback until the cache has been generated.
+closure_filter_cached = (
+    load_parquet(CLOSURE_FILTER_FILE, file_version(CLOSURE_FILTER_FILE))
+    if CLOSURE_FILTER_FILE.exists() else pd.DataFrame()
+)
+closure_monthly_cached = (
+    load_parquet(CLOSURE_MONTHLY_FILE, file_version(CLOSURE_MONTHLY_FILE))
+    if CLOSURE_MONTHLY_FILE.exists() else pd.DataFrame()
+)
+if (closure_filter_cached.empty or closure_monthly_cached.empty) and not processed_files:
+    st.error("Missing closure filter caches. Run python dashboard/build_closure_cache.py locally and push both new Parquet files.")
+    st.stop()
+
 
 @st.cache_data(show_spinner=False)
 def load_or_build_agency_cube(cache_version):
@@ -1574,6 +1593,45 @@ def closure_profile(
     complaint_filter,
     data_version,
 ):
+    # Prefer exact cache generated locally from the 48 processed partitions.
+    if not closure_filter_cached.empty and not closure_monthly_cached.empty:
+        selected = closure_filter_cached.loc[
+            closure_filter_cached["year_filter"].eq(str(year_filter))
+            & closure_filter_cached["borough_filter"].eq(str(borough_filter))
+            & closure_filter_cached["complaint_filter"].eq(str(complaint_filter))
+        ]
+        if len(selected) > 1:
+            raise ValueError("Duplicate cache rows for the selected closure filters")
+        if selected.empty:
+            return (
+                {"count": 0, "median": np.nan, "p75": np.nan, "p90": np.nan, "p95": np.nan},
+                pd.DataFrame(),
+            )
+        record = selected.iloc[0]
+        summary = {
+            "count": int(record["valid_requests"]),
+            "median": float(record["median"]),
+            "p75": float(record["p75"]),
+            "p90": float(record["p90"]),
+            "p95": float(record["p95"]),
+        }
+        month_scope = closure_monthly_cached.loc[
+            closure_monthly_cached["borough_filter"].eq(str(borough_filter))
+            & closure_monthly_cached["complaint_filter"].eq(str(complaint_filter))
+        ].copy()
+        if year_filter != "All years":
+            month_scope = month_scope.loc[
+                month_scope["year_filter"].eq(str(year_filter))
+            ].copy()
+        if not month_scope.empty:
+            month_scope["year"] = month_scope["year_filter"].astype(int)
+            month_scope["date"] = pd.to_datetime(
+                dict(year=month_scope["year"], month=month_scope["month"], day=1)
+            )
+            month_scope = month_scope.sort_values(["year", "month"]).reset_index(drop=True)
+        return summary, month_scope
+
+    # Legacy local-only fallback, for projects that have not generated cache.
     arrays = []
     monthly_rows = []
 
