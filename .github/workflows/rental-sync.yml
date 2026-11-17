@@ -1,0 +1,53 @@
+name: Update geographic Compare after completed backfill
+
+on:
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rental-compare-postgres
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test validation and failure handling
+        run: python -m unittest discover -s tests -v
+      - name: Verify configuration
+        shell: bash
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo '::error::Missing repository secret DATABASE_URL for the existing Supabase database.'
+            exit 1
+          fi
+      - name: Require completed backfill, plan capacity, reconcile new and changed requests
+        run: python src/load_rental_clean.py --sync
+      - name: Durable coverage report
+        run: python src/load_rental_clean.py --report
+      - name: Preserve acquisition audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rental-acquisition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/rental/runs/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Mark failed synchronization
+        if: failure()
+        run: echo '::error::Compare update failed or initial geographic backfill is missing. Previous validated coverage remains unchanged. Run the explicit backfill first and inspect the PostgreSQL ledger.'

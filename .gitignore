@@ -1,6 +1,8 @@
 # Du lieu lon
 data/raw/
 data/processed/
+data/rental/
+outputs/tables/rental_runs/
 
 # Moi truong Python
 .venv/
@@ -14,4 +16,8 @@ logs/
 
 # Thong tin rieng tu
 .env
+.env.*
+!.env.example
 .streamlit/secrets.toml
+dashboard/app_backup.py
+.pytest_cache/
