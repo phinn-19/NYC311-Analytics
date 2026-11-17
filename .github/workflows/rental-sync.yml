@@ -1,3 +1,4 @@
+
 name: Update geographic Compare after completed backfill
 
 on:
@@ -16,30 +17,141 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       PYTHONUNBUFFERED: '1'
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+
       - name: Test validation and failure handling
         run: python -m unittest discover -s tests -v
+
       - name: Verify configuration
         shell: bash
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo '::error::Missing repository secret DATABASE_URL for the existing Supabase database.'
+            echo '::error::Missing repository secret DATABASE_URL.'
             exit 1
           fi
+
+      # KIEM TRA KET NOI SUPABASE TRUOC KHI CHAY ETL
+      - name: Diagnose Supabase connection
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import socket
+          from urllib.parse import urlsplit, unquote
+
+          import psycopg
+
+          url = os.getenv("DATABASE_URL", "")
+
+          if not url:
+              raise SystemExit("DB_DIAG: SECRET_MISSING")
+
+          try:
+              parsed = urlsplit(url)
+              host = parsed.hostname
+              port = parsed.port or 5432
+              username = unquote(parsed.username or "")
+              password = unquote(parsed.password or "")
+
+              if not host or not username or not password:
+                  raise ValueError("Missing connection fields")
+
+          except (ValueError, TypeError):
+              raise SystemExit("DB_DIAG: INVALID_URL")
+
+          if "YOUR-PASSWORD" in password or "[YOUR" in password:
+              raise SystemExit("DB_DIAG: PASSWORD_PLACEHOLDER")
+
+          if "pooler.supabase.com" in host:
+              print("DB_DIAG: SESSION_OR_TRANSACTION_POOLER")
+          else:
+              print("DB_DIAG: DIRECT_OR_OTHER")
+
+          try:
+              addresses = socket.getaddrinfo(
+                  host,
+                  port,
+                  type=socket.SOCK_STREAM
+              )
+
+              ipv4 = [
+                  item for item in addresses
+                  if item[0] == socket.AF_INET
+              ]
+
+              if not ipv4:
+                  raise SystemExit("DB_DIAG: NO_IPV4")
+
+              print("DB_DIAG: DNS_AND_IPV4_OK")
+
+          except socket.gaierror:
+              raise SystemExit("DB_DIAG: DNS_FAILED")
+
+          try:
+              with socket.socket(
+                  socket.AF_INET,
+                  socket.SOCK_STREAM
+              ) as connection:
+                  connection.settimeout(10)
+                  connection.connect(ipv4[0][4])
+
+              print("DB_DIAG: TCP_OK")
+
+          except OSError:
+              raise SystemExit("DB_DIAG: TCP_FAILED")
+
+          try:
+              with psycopg.connect(
+                  url,
+                  connect_timeout=15,
+                  sslmode="require"
+              ) as conn:
+                  conn.execute("SELECT 1").fetchone()
+
+              print("DB_DIAG: POSTGRES_OK")
+
+          except psycopg.OperationalError as exc:
+              message = str(exc).lower()
+
+              if "password authentication failed" in message:
+                  raise SystemExit("DB_DIAG: AUTH_FAILED")
+
+              if "tenant or user not found" in message:
+                  raise SystemExit(
+                      "DB_DIAG: WRONG_POOLER_USERNAME_OR_HOST"
+                  )
+
+              if "timeout" in message or "unreachable" in message:
+                  raise SystemExit("DB_DIAG: NETWORK_ERROR")
+
+              raise SystemExit(
+                  "DB_DIAG: POSTGRES_FAILED SQLSTATE="
+                  + str(exc.sqlstate or "unknown")
+              )
+          PY
+
       - name: Require completed backfill, plan capacity, reconcile new and changed requests
         run: python src/load_rental_clean.py --sync
+
       - name: Durable coverage report
         run: python src/load_rental_clean.py --report
+
       - name: Preserve acquisition audit artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,6 +160,8 @@ jobs:
           path: data/rental/runs/
           if-no-files-found: ignore
           retention-days: 14
+
       - name: Mark failed synchronization
         if: failure()
-        run: echo '::error::Compare update failed or initial geographic backfill is missing. Previous validated coverage remains unchanged. Run the explicit backfill first and inspect the PostgreSQL ledger.'
+        run: |
+          echo '::error::Compare synchronization failed. Inspect the diagnostic step and PostgreSQL coverage.'
