@@ -3,7 +3,7 @@ name: Update geographic Compare after completed backfill
 
 on:
   schedule:
-    - cron: '23 8 * * *'
+    - cron: '7 4 * * *'
   workflow_dispatch:
 
 permissions:
