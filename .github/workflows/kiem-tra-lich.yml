@@ -1,0 +1,15 @@
+
+name: Kiem tra lich tu dong
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  kiem-tra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Xac nhan kich hoat tu dong
+        run: |
+          echo "Kieu kich hoat: ${{ github.event_name }}"
+          echo "Da kich hoat kiem tra lich."
